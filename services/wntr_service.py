@@ -20,15 +20,15 @@ def run_simulation(inp_file, magnitude, depth):
     wn = wntr.network.WaterNetworkModel(inp_path)
 
     # =====================================================
-    # Parámetros fijos (puedes exponerlos luego si quieres)
+    # Parámetros base
     # =====================================================
     epicenter = (787671.8935, 9992673.3202)
+
     total_duration = 24 * 3600
     minimum_pressure = 3.52
     required_pressure = 14.06
 
     leak_start_time = 5 * 3600
-    leak_repair_time = 15 * 3600
 
     np.random.seed(13315)
 
@@ -38,7 +38,7 @@ def run_simulation(inp_file, magnitude, depth):
     earthquake = wntr.scenario.Earthquake(epicenter, magnitude, depth)
 
     # =====================================================
-    # PGA, PGV, Repair Rate
+    # Distancias, PGA, PGV, Repair Rate
     # =====================================================
     R = earthquake.distance_to_epicenter(
         wn, element_type=wntr.network.Pipe
@@ -52,7 +52,7 @@ def run_simulation(inp_file, magnitude, depth):
     )
 
     # =====================================================
-    # Fragilidad
+    # Curva de fragilidad
     # =====================================================
     pipe_FC = wntr.scenario.FragilityCurve()
     pipe_FC.add_state('Minor Leak', 1, {'Default': expon(scale=0.2)})
@@ -112,17 +112,14 @@ def run_simulation(inp_file, magnitude, depth):
 
     pressure_24h = pressure.loc[time_24h, wn.junction_name_list]
 
-    pressure_df = pressure_24h.reset_index()
-    pressure_df.columns = ['node', 'pressure']
-
     # =====================================================
-    # Métricas
+    # Métricas resumen
     # =====================================================
     summary = {
         "time_analyzed_h": round(time_24h, 2),
-        "pressure_min": round(pressure_24h.min(), 2),
-        "pressure_max": round(pressure_24h.max(), 2),
-        "pressure_mean": round(pressure_24h.mean(), 2),
+        "pressure_min": round(float(pressure_24h.min()), 2),
+        "pressure_max": round(float(pressure_24h.max()), 2),
+        "pressure_mean": round(float(pressure_24h.mean()), 2),
         "nodes_below_required_percent": round(
             (pressure_24h < required_pressure).sum()
             / len(pressure_24h) * 100, 2
@@ -135,7 +132,20 @@ def run_simulation(inp_file, magnitude, depth):
     }
 
     # =====================================================
-    # Datos de red para mapas (Leaflet / ECharts)
+    # Datos de nodos (para mapas de presión)
+    # =====================================================
+    nodes_data = []
+    for node_name in wn.junction_name_list:
+        node = wn.get_node(node_name)
+        nodes_data.append({
+            "id": node_name,
+            "x": float(node.coordinates[0]),
+            "y": float(node.coordinates[1]),
+            "pressure": float(pressure_24h.get(node_name, 0))
+        })
+
+    # =====================================================
+    # Datos de tuberías (para mapas PGA, PGV, RR, daño)
     # =====================================================
     pipes_data = []
     for pipe_name in wn.pipe_name_list:
@@ -145,17 +155,10 @@ def run_simulation(inp_file, magnitude, depth):
             "from": pipe.start_node_name,
             "to": pipe.end_node_name,
             "damage_state": pipe_damage_state.get(pipe_name, "None"),
-            "repair_rate": float(RR.get(pipe_name, 0))
-        })
-
-    nodes_data = []
-    for node_name in wn.junction_name_list:
-        node = wn.get_node(node_name)
-        nodes_data.append({
-            "id": node_name,
-            "x": node.coordinates[0],
-            "y": node.coordinates[1],
-            "pressure": float(pressure_24h.get(node_name, 0))
+            "repair_rate": float(RR.get(pipe_name, 0)),
+            "distance": float(R.get(pipe_name, 0)),
+            "pga": float(pga.get(pipe_name, 0)),
+            "pgv": float(pgv.get(pipe_name, 0))
         })
 
     # =====================================================
@@ -163,6 +166,9 @@ def run_simulation(inp_file, magnitude, depth):
     # =====================================================
     os.remove(inp_path)
 
+    # =====================================================
+    # Respuesta final
+    # =====================================================
     return {
         "summary": summary,
         "nodes": nodes_data,
