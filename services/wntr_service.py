@@ -87,6 +87,29 @@ def run_simulation(inp_storage_file, magnitude: float, depth: float,x:float,y:fl
         pipe_FC.add_state("Minor Leak", 1, {"Default": expon(scale=0.2)})
         pipe_FC.add_state("Major Leak", 2, {"Default": expon()})
 
+        # -----------------------------
+        # Curva de fragilidad (para FRONT)
+        # -----------------------------
+        x_fc = np.linspace(0, 5, 100)  # mismo rango típico que wntr usa
+        minor_fc = expon(scale=0.2).cdf(x_fc)
+        major_fc = expon().cdf(x_fc)
+
+        fragility_curve_data = {
+            "x": x_fc.tolist(),
+            "states": [
+                {
+                    "name": "Minor Leak",
+                    "y": minor_fc.tolist()
+                },
+                {
+                    "name": "Major Leak",
+                    "y": major_fc.tolist()
+                }
+            ]
+        }
+
+
+
         # Probabilidades de daño por tubería
         RR_x_L = RR * L
         pipe_Pr = pipe_FC.cdf_probability(RR_x_L)
@@ -209,7 +232,8 @@ def run_simulation(inp_storage_file, magnitude: float, depth: float,x:float,y:fl
         pipes_data = []
         for pipe_name in wn.pipe_name_list:
             pipe = wn.get_link(pipe_name)
-
+            vel_series = results.link["velocity"]
+            speed_24h = vel_series.loc[0, pipe_name]
             pipes_data.append(
                 {
                     "id": pipe_name,
@@ -227,7 +251,7 @@ def run_simulation(inp_storage_file, magnitude: float, depth: float,x:float,y:fl
                     "damage_index": float(RR_x_L.get(pipe_name, 0.0)),  # RR * L
                     "p_minor_leak": float(pipe_Pr["Minor Leak"].get(pipe_name, 0.0)),
                     "p_major_leak": float(pipe_Pr["Major Leak"].get(pipe_name, 0.0)),
-                    "speed": float(results.link["velocity"].loc[time_24h, pipe_name])
+                    "speed": float(speed_24h)
                 }
             )
 
@@ -263,6 +287,7 @@ def run_simulation(inp_storage_file, magnitude: float, depth: float,x:float,y:fl
             "pipes": pipes_data,
             "leaks": leaks_data,
             "leak_ranking": leak_ranking_data,
+            "fragility_curve": fragility_curve_data
         }
 
     finally:
