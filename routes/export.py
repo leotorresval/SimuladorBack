@@ -20,7 +20,8 @@ def export_table(table):
     data = simulation[table]
 
     if table == "summary":
-        data = [simulation["summary"]]
+        merged = {**simulation["summary"], **simulation["epicenter"]}
+        data = [merged]
 
     df = pd.DataFrame(data)
     fmt = request.args.get("format", "csv")

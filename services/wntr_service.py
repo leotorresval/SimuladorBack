@@ -183,6 +183,55 @@ def run_simulation(inp_storage_file, magnitude, depth, epicenter_x, epicenter_y)
         t24 = pressure.index[abs(pressure.index - 24).argmin()]
         pressure_24h = pressure.loc[t24, wn.junction_name_list]
 
+        # =====================
+        # RESILIENCIA
+        # =====================
+        print("WSA start")
+        expected_demand = wntr.metrics.expected_demand(wn)
+        demand = results.node['demand']
+
+        wsa = wntr.metrics.water_service_availability(
+            expected_demand,
+            demand
+        )
+
+        wsa_avg = float(wsa.mean().mean())
+        print("WSA done")
+
+        # Todini
+        print("Todini start")
+        head = results.node['head']
+        pressure = results.node['pressure']
+        flowrate = results.link['flowrate']
+
+        pump_flowrate = flowrate.loc[:, wn.pump_name_list]
+
+        todini_index = wntr.metrics.todini_index(
+            head,
+            pressure,
+            demand,
+            pump_flowrate,
+            wn,
+            REQUIRED_PRESSURE
+        )
+
+        todini_avg = float(todini_index.mean())
+        print("Todini done")
+
+        # # Entropía
+        # print("Entropía start")
+        # flow_snapshot = flowrate.loc[12*3600, :]
+        # flow_snapshot = abs(flow_snapshot)
+        # flow_snapshot = flow_snapshot.sort_values(ascending=False).head(500)
+
+        # G = wn.to_graph(link_weight=flow_snapshot)
+
+        # _, system_entropy = wntr.metrics.entropy(G)
+        # print("Entropía done")
+
+
+
+
         # -----------------------------
         # Summary
         # -----------------------------
@@ -196,8 +245,10 @@ def run_simulation(inp_storage_file, magnitude, depth, epicenter_x, epicenter_y)
             ),
             "avg_minor_leak_prob": round(pipe_Pr["Minor Leak"].mean(), 3),
             "avg_major_leak_prob": round(pipe_Pr["Major Leak"].mean(), 3),
+            "wsa_avg": round(wsa_avg, 3),
+            "todini_index": round(todini_avg, 3),
+            # "system_entropy": round(float(system_entropy), 3),
         }
-
         # -----------------------------
         # Nodes
         # -----------------------------
@@ -207,8 +258,6 @@ def run_simulation(inp_storage_file, magnitude, depth, epicenter_x, epicenter_y)
             x, y = node.coordinates if node.coordinates else (None, None)
             lat, lng = utm_to_latlng(x, y)
             demand_m3s = node.demand_timeseries_list[0].base_value
-
-
 
             nodes_data.append({
                 "id": node_name,
@@ -260,6 +309,8 @@ def run_simulation(inp_storage_file, magnitude, depth, epicenter_x, epicenter_y)
             "epicenter": {
                 "x": epicenter_x,
                 "y": epicenter_y,
+                "magnitude": magnitude,
+                "depth": depth,
                 "lat": epicenter_lat,
                 "lng": epicenter_lng,
             },
