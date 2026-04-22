@@ -302,6 +302,39 @@ def run_simulation(inp_storage_file, magnitude, depth, epicenter_x, epicenter_y)
                 "flowrate_lps": float(flow_series.loc[0, pipe_name] * 1000),  # L/s
             })
 
+        # demand_series = results.node["demand"]
+
+        # leak_demand_curve = {
+        #     "time": list(demand_series.index / 3600),
+        #     "series": []
+        # }
+
+        # for node_name in demand_series.columns:
+        #     if node_name.startswith("Leak_"):
+        #         leak_demand_curve["series"].append({
+        #             "name": node_name,
+        #             "y": (demand_series[node_name].abs() * 1000).tolist()
+        #         })
+
+
+
+        leak_series = results.node["leak_demand"]
+
+        leaked_sum = leak_series.sum().sort_values(ascending=False)
+        pipes_to_fix = leaked_sum.head(4)
+        print("Tuberías críticas:")
+        print(pipes_to_fix)
+        leak_demand_curve = {
+            "time": (leak_series.index / 3600).tolist(),
+            "series": []
+        }
+
+        for node_name in leak_series.columns:
+            leak_demand_curve["series"].append({
+                "name": node_name,
+                "y": (leak_series[node_name] * 1000).tolist()  # L/s
+            })
+
         # -----------------------------
         # RESPONSE
         # -----------------------------
@@ -319,6 +352,7 @@ def run_simulation(inp_storage_file, magnitude, depth, epicenter_x, epicenter_y)
             "pipes": pipes_data,
             "leaks": leaks_data,
             "fragility_curve": fragility_curve_data,
+            "leak_demand_curve": leak_demand_curve
         }
         storage.LAST_SIMULATION = result
         storage.save_simulation(result)
