@@ -231,6 +231,54 @@ def run_simulation(inp_storage_file, magnitude, depth, epicenter_x, epicenter_y)
 
 
 
+        leak_series = results.node["leak_demand"]
+
+        
+        leak_demand_curve = {
+            "time": (leak_series.index / 3600).tolist(),
+            "series": []
+        }
+
+        for node_name in leak_series.columns:
+            leak_demand_curve["series"].append({
+                "name": node_name,
+                "y": (leak_series[node_name] * 1000).tolist()  # L/s
+            })
+
+        # -----------------------------
+        # tuberias fix
+        # -----------------------------
+        
+        leaked_sum = leak_series.sum().sort_values(ascending=False)
+        pipes_to_fix = leaked_sum[leaked_sum > 0]
+        num_pipes_to_repair = sum(
+            1 for damage_state in pipe_damage_state.values
+            if damage_state in ['Minor Leak', 'Major Leak']
+        )
+        
+        df_pipes_to_fix = pipes_to_fix.reset_index()
+        df_pipes_to_fix.columns = ['Tuberia', 'Fuga_acumulada']
+
+        # Quitar el prefijo 'Leak_' para recuperar el nombre original de la tubería
+        df_pipes_to_fix['Tuberia'] = df_pipes_to_fix['Tuberia'].str.replace('Leak_', '', regex=False)
+
+        # Agregar estado de daño
+        df_damage = pd.Series(pipe_damage_state, name='Estado_daño').reset_index()
+        df_damage.columns = ['Tuberia', 'Estado_daño']
+
+        # Asegurar mismo tipo de dato en ambas columnas
+        df_pipes_to_fix['Tuberia'] = df_pipes_to_fix['Tuberia'].astype(str)
+        df_damage['Tuberia'] = df_damage['Tuberia'].astype(str)
+
+        # Unir información
+        df_export = df_pipes_to_fix.merge(df_damage, on='Tuberia', how='left')
+        df_export.insert(0, 'Prioridad', range(1, len(df_export) + 1))
+        
+        df_export = df_export[
+            [ 'Tuberia','Prioridad', 'Estado_daño', 'Fuga_acumulada']
+        ]
+        pipes_fix_list = df_export.to_dict(orient="records")
+
 
         # -----------------------------
         # Summary
@@ -247,6 +295,7 @@ def run_simulation(inp_storage_file, magnitude, depth, epicenter_x, epicenter_y)
             "avg_major_leak_prob": round(pipe_Pr["Major Leak"].mean(), 3),
             "wsa_avg": round(wsa_avg, 3),
             "todini_index": round(todini_avg, 3),
+             "pipes_to_fix": pipes_fix_list,
             # "system_entropy": round(float(system_entropy), 3),
         }
         # -----------------------------
@@ -302,38 +351,6 @@ def run_simulation(inp_storage_file, magnitude, depth, epicenter_x, epicenter_y)
                 "flowrate_lps": float(flow_series.loc[0, pipe_name] * 1000),  # L/s
             })
 
-        # demand_series = results.node["demand"]
-
-        # leak_demand_curve = {
-        #     "time": list(demand_series.index / 3600),
-        #     "series": []
-        # }
-
-        # for node_name in demand_series.columns:
-        #     if node_name.startswith("Leak_"):
-        #         leak_demand_curve["series"].append({
-        #             "name": node_name,
-        #             "y": (demand_series[node_name].abs() * 1000).tolist()
-        #         })
-
-
-
-        leak_series = results.node["leak_demand"]
-
-        leaked_sum = leak_series.sum().sort_values(ascending=False)
-        pipes_to_fix = leaked_sum.head(4)
-        print("Tuberías críticas:")
-        print(pipes_to_fix)
-        leak_demand_curve = {
-            "time": (leak_series.index / 3600).tolist(),
-            "series": []
-        }
-
-        for node_name in leak_series.columns:
-            leak_demand_curve["series"].append({
-                "name": node_name,
-                "y": (leak_series[node_name] * 1000).tolist()  # L/s
-            })
 
         # -----------------------------
         # RESPONSE
