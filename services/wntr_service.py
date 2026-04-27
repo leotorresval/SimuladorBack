@@ -180,6 +180,20 @@ def run_simulation(inp_storage_file, magnitude, depth, epicenter_x, epicenter_y)
         pressure = results.node["pressure"]
         pressure.index /= 3600
 
+
+        # =====================================================
+        # CURVA DE PRESIÓN PROMEDIO
+        # =====================================================
+        avg_pressure = pressure.mean(axis=1)
+
+        pressure_avg_curve = {
+            "time": avg_pressure.index.tolist(),
+            "values": avg_pressure.tolist()
+        }
+
+
+
+
         t24 = pressure.index[abs(pressure.index - 24).argmin()]
         pressure_24h = pressure.loc[t24, wn.junction_name_list]
 
@@ -369,7 +383,8 @@ def run_simulation(inp_storage_file, magnitude, depth, epicenter_x, epicenter_y)
             "pipes": pipes_data,
             "leaks": leaks_data,
             "fragility_curve": fragility_curve_data,
-            "leak_demand_curve": leak_demand_curve
+            "leak_demand_curve": leak_demand_curve,
+            "pressure_avg_curve": pressure_avg_curve,
         }
         storage.LAST_SIMULATION = result
         storage.save_simulation(result)
