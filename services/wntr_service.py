@@ -43,7 +43,7 @@ TOTAL_DURATION_S = 24 * 3600
 MINIMUM_PRESSURE = 3.52
 REQUIRED_PRESSURE = 14.06
 LEAK_START_TIME_S = 5 * 3600
-
+LEAK_REPAIR_TIME_S = 15 * 3600
 np.random.seed(13315)
 
 
@@ -293,6 +293,75 @@ def run_simulation(inp_storage_file, magnitude, depth, epicenter_x, epicenter_y)
         ]
         pipes_fix_list = df_export.to_dict(orient="records")
 
+        # -----------------------------
+        # SEGUNDA SIMULACION
+        # -----------------------------
+        wn.reset_initial_values()
+
+        for node_name in pipes_to_fix.index:
+            node = wn.get_node(node_name)
+
+            if hasattr(node, "leak_area") and node.leak_area > 0:
+                area = node.leak_area
+
+                node.remove_leak(wn)
+
+                node.add_leak(
+                    wn,
+                    area=area,
+                    start_time=LEAK_START_TIME_S,
+                    end_time=LEAK_REPAIR_TIME_S
+                )
+
+        # Segunda simulación
+        sim_repair = wntr.sim.WNTRSimulator(wn)
+        results_repair = sim_repair.run_sim()
+
+
+        leak_series_no = results.node["leak_demand"]
+        leak_series_rep = results_repair.node["leak_demand"]
+
+        leak_demand_curve_repair = {
+            "time": (leak_series_rep.index / 3600).tolist(),
+            "series": []
+        }
+
+        for node_name in leak_series_rep.columns:
+            leak_demand_curve_repair["series"].append({
+                "name": node_name,
+                "y": (leak_series_rep[node_name] * 1000).tolist()  # L/s
+            })
+
+
+        time_hours = leak_series_no.index / 3600
+
+        total_leak_no = leak_series_no.sum(axis=1)
+        total_leak_rep = leak_series_rep.sum(axis=1)
+
+        max_leak = max(total_leak_no.max(), total_leak_rep.max())
+
+        Q_no = 1 - (total_leak_no / max_leak)
+        Q_rep = 1 - (total_leak_rep / max_leak)
+
+        Q_no = Q_no.clip(0, 1)
+        Q_rep = Q_rep.clip(0, 1)
+
+        RS_no = float(np.trapz(Q_no, time_hours) / time_hours.max())
+        RS_rep = float(np.trapz(Q_rep, time_hours) / time_hours.max())
+
+
+        recovery_curve = {
+            "time": time_hours.tolist(),
+            "no_repair": Q_no.tolist(),
+            "repair": Q_rep.tolist(),
+            "event_time": LEAK_START_TIME_S / 3600,
+            "repair_time": LEAK_REPAIR_TIME_S / 3600
+        }
+
+        resilience_index = {
+            "no_repair": round(RS_no, 3),
+            "repair": round(RS_rep, 3)
+        }
 
         # -----------------------------
         # Summary
@@ -384,7 +453,10 @@ def run_simulation(inp_storage_file, magnitude, depth, epicenter_x, epicenter_y)
             "leaks": leaks_data,
             "fragility_curve": fragility_curve_data,
             "leak_demand_curve": leak_demand_curve,
+            "leak_demand_curve_repair": leak_demand_curve_repair,
             "pressure_avg_curve": pressure_avg_curve,
+            "recovery_curve": recovery_curve,
+            "resilience_index": resilience_index
         }
         storage.LAST_SIMULATION = result
         storage.save_simulation(result)
