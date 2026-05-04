@@ -3,6 +3,8 @@ import os
 import tempfile
 import numpy as np
 import pandas as pd
+import warnings
+
 from scipy.stats import expon
 
 from flask import Flask, request, jsonify
@@ -45,8 +47,10 @@ REQUIRED_PRESSURE = 14.06
 LEAK_START_TIME_S = 5 * 3600
 LEAK_REPAIR_TIME_S = 15 * 3600
 np.random.seed(13315)
-
-
+leak_demand_curve_repair = {}
+recovery_curve = {}
+resilience_index = {}
+second_simulation = {}
 def infer_material_hw(C):
     if C >= 140:
         return "PVC / PEAD"
@@ -247,18 +251,17 @@ def run_simulation(inp_storage_file, magnitude, depth, epicenter_x, epicenter_y)
 
         leak_series = results.node["leak_demand"]
 
-        leak_demand_curve = build_leak_demand_curve(leak_series)
         
-        # leak_demand_curve = {
-        #     "time": (leak_series.index / 3600).tolist(),
-        #     "series": []
-        # }
+        leak_demand_curve = {
+            "time": (leak_series.index / 3600).tolist(),
+            "series": []
+        }
 
-        # for node_name in leak_series.columns:
-        #     leak_demand_curve["series"].append({
-        #         "name": node_name,
-        #         "y": (leak_series[node_name] * 1000).tolist()  # L/s
-        #     })
+        for node_name in leak_series.columns:
+            leak_demand_curve["series"].append({
+                "name": node_name,
+                "y": (leak_series[node_name] * 1000).tolist()  # L/s
+            })
 
         # -----------------------------
         # tuberias fix
@@ -297,73 +300,121 @@ def run_simulation(inp_storage_file, magnitude, depth, epicenter_x, epicenter_y)
         # -----------------------------
         # SEGUNDA SIMULACION
         # -----------------------------
-        wn.reset_initial_values()
+        try:
+            print("Empezando segunda simulación...")
+            wn.reset_initial_values()
 
-        for node_name in pipes_to_fix.index:
-            node = wn.get_node(node_name)
+            for node_name in pipes_to_fix.index:
+                node = wn.get_node(node_name)
 
-            if hasattr(node, "leak_area") and node.leak_area > 0:
-                area = node.leak_area
+                if hasattr(node, "leak_area") and node.leak_area > 0:
+                    area = node.leak_area
 
-                node.remove_leak(wn)
+                    node.remove_leak(wn)
 
-                node.add_leak(
-                    wn,
-                    area=area,
-                    start_time=LEAK_START_TIME_S,
-                    end_time=LEAK_REPAIR_TIME_S
-                )
+                    node.add_leak(
+                        wn,
+                        area=area,
+                        start_time=LEAK_START_TIME_S,
+                        end_time=LEAK_REPAIR_TIME_S
+                    )
 
-        # Segunda simulación
-        sim_repair = wntr.sim.WNTRSimulator(wn)
-        results_repair = sim_repair.run_sim()
+            # Segunda simulación
+            sim_repair = wntr.sim.WNTRSimulator(wn)
+            
+            with warnings.catch_warnings():
+                warnings.simplefilter("error") 
+                results_repair = sim_repair.run_sim()
+            
+            results_repair = sim_repair.run_sim()
+            leak_series_rep = results_repair.node["leak_demand"]
+            if leak_series_rep.isna().values.any():
+                raise Exception("Leak demand inválido")
+            
+            if results_repair is None or len(results_repair.node) == 0:
+                raise Exception("Simulación sin resultados válidos")
+            
+            if results_repair.node["pressure"].isna().values.any():
+                raise Exception("Simulación no convergente (NaN detectado)")
+            
+            
+            pressure = results_repair.node["pressure"]
+            if (pressure < -100).any().any():
+                raise Exception("Presiones inválidas (no convergente)")
+                        
+            
+
+            print("Segunda simulación hecha")
+
+            leak_series_no = results.node["leak_demand"]
+            leak_series_rep = results_repair.node["leak_demand"]
+            print("Series de fuga obtenidas")
+            leak_demand_curve_repair = {
+                "time": (leak_series_rep.index / 3600).tolist(),
+                "series": []
+            }
+
+            for node_name in leak_series_rep.columns:
+                leak_demand_curve_repair["series"].append({
+                    "name": node_name,
+                    "y": (leak_series_rep[node_name] * 1000).tolist()  # L/s
+                })
 
 
-        leak_series_no = results.node["leak_demand"]
-        leak_series_rep = results_repair.node["leak_demand"]
-        leak_demand_curve_repair = build_leak_demand_curve(leak_series_rep)
-        # leak_demand_curve_repair = {
-        #     "time": (leak_series_rep.index / 3600).tolist(),
-        #     "series": []
-        # }
+            time_hours = leak_series_no.index / 3600
 
-        # for node_name in leak_series_rep.columns:
-        #     leak_demand_curve_repair["series"].append({
-        #         "name": node_name,
-        #         "y": (leak_series_rep[node_name] * 1000).tolist()  # L/s
-        #     })
+            total_leak_no = leak_series_no.sum(axis=1)
+            total_leak_rep = leak_series_rep.sum(axis=1)
 
+            max_leak = max(total_leak_no.max(), total_leak_rep.max())
 
-        time_hours = leak_series_no.index / 3600
+            Q_no = 1 - (total_leak_no / max_leak)
+            Q_rep = 1 - (total_leak_rep / max_leak)
 
-        total_leak_no = leak_series_no.sum(axis=1)
-        total_leak_rep = leak_series_rep.sum(axis=1)
+            Q_no = Q_no.clip(0, 1)
+            Q_rep = Q_rep.clip(0, 1)
 
-        max_leak = max(total_leak_no.max(), total_leak_rep.max())
+            RS_no = float(np.trapz(Q_no, time_hours) / time_hours.max())
+            RS_rep = float(np.trapz(Q_rep, time_hours) / time_hours.max())
 
-        Q_no = 1 - (total_leak_no / max_leak)
-        Q_rep = 1 - (total_leak_rep / max_leak)
+            print(f"Resilience Index sin reparación")
+            recovery_curve = {
+                "time": time_hours.tolist(),
+                "no_repair": Q_no.tolist(),
+                "repair": Q_rep.tolist(),
+                "event_time": LEAK_START_TIME_S / 3600,
+                "repair_time": LEAK_REPAIR_TIME_S / 3600
+            }
+            print(f"Resilience Index con reparación:")
+            resilience_index = {
+                "no_repair": round(RS_no, 3),
+                "repair": round(RS_rep, 3)
+            }
+            second_simulation = {
+                "status": "ok",
+                "message": None
+            }
+        except Exception as e:
+            print(f"Error en la segunda simulación: {e}")
+            recovery_curve = {
+                "time": [],
+                "no_repair": [],
+                "repair": [],
+            }
 
-        Q_no = Q_no.clip(0, 1)
-        Q_rep = Q_rep.clip(0, 1)
+            resilience_index = {
+                "no_repair": None,
+                "repair": None
+            }
 
-        RS_no = float(np.trapz(Q_no, time_hours) / time_hours.max())
-        RS_rep = float(np.trapz(Q_rep, time_hours) / time_hours.max())
-
-
-        recovery_curve = {
-            "time": time_hours.tolist(),
-            "no_repair": Q_no.tolist(),
-            "repair": Q_rep.tolist(),
-            "event_time": LEAK_START_TIME_S / 3600,
-            "repair_time": LEAK_REPAIR_TIME_S / 3600
-        }
-
-        resilience_index = {
-            "no_repair": round(RS_no, 3),
-            "repair": round(RS_rep, 3)
-        }
-
+            leak_demand_curve_repair = {
+                "time": [],
+                "series": []
+            }
+            second_simulation = {
+                "status": "error",
+                "message": str(e)
+            }
         # -----------------------------
         # Summary
         # -----------------------------
@@ -454,10 +505,11 @@ def run_simulation(inp_storage_file, magnitude, depth, epicenter_x, epicenter_y)
             "leaks": leaks_data,
             "fragility_curve": fragility_curve_data,
             "leak_demand_curve": leak_demand_curve,
-            "leak_demand_curve_repair": leak_demand_curve_repair,
             "pressure_avg_curve": pressure_avg_curve,
+            "leak_demand_curve_repair": leak_demand_curve_repair,
             "recovery_curve": recovery_curve,
-            "resilience_index": resilience_index
+            "resilience_index": resilience_index,
+            "second_simulation": second_simulation
         }
         storage.LAST_SIMULATION = result
         storage.save_simulation(result)
@@ -467,27 +519,3 @@ def run_simulation(inp_storage_file, magnitude, depth, epicenter_x, epicenter_y)
         if tmp_path and os.path.exists(tmp_path):
             os.remove(tmp_path)
 
-
-
-def build_leak_demand_curve(leak_series, eps=1e-9):
-    curve = {
-        "time": (leak_series.index / 3600).tolist(),
-        "series": []
-    }
-
-    for node_name in leak_series.columns:
-        # Solo nodos artificiales de fuga
-        if not str(node_name).startswith("Leak_"):
-            continue
-
-        values = leak_series[node_name] * 1000  # m³/s a L/s
-
-        # Solo series con fuga real
-        if values.abs().sum() > eps:
-            curve["series"].append({
-                "name": node_name,
-                "pipe_origin": str(node_name).replace("Leak_", ""),
-                "y": values.tolist()
-            })
-
-    return curve
